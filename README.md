@@ -104,6 +104,17 @@ own SSL semantics that override the explicit `ssl` option in some versions.
 out an ECS Express Mode service via OIDC federation (no long-lived AWS
 keys in GitHub).
 
+There are two distinct categories of configuration the workflow uses:
+
+- **Backend runtime env** — passed to the ECS task at runtime via the
+  Express Mode deploy step (e.g. `DATABASE_URL`, `GOOGLE_CLIENT_ID`,
+  `GOOGLE_CLIENT_SECRET`, `OPENAI_API_KEY`). Changing these only requires
+  redeploying the task.
+- **Frontend build-time env** — `VITE_*` vars inlined into the client JS
+  bundle by Vite during `npm run build`. These are passed to
+  `docker buildx build` as `--build-arg` and baked into the image. Changing
+  them requires rebuilding the image, not just restarting the task.
+
 ### Repo-level GitHub Variables
 
 Set these under **Settings → Secrets and variables → Actions → Variables**:
@@ -114,18 +125,19 @@ Set these under **Settings → Secrets and variables → Actions → Variables**
 | `TASK_SECURITY_GROUP` | `sg-0abc123...` | EliteTC-specific SG; **not** the EliteGCI SG |
 | `S3_DOCUMENTS_BUCKET` | `elitetc-documents` | Document storage bucket |
 | `APP_BASE_URL` | `https://app.elitetc.com` | Used in magic-link emails |
+| `VITE_ALLOW_DEV_LOGIN` | `false` *(default)* | **Frontend build-time.** Set to `"true"` to surface the dev-login form in the production bundle. Leave unset (or `"false"`) for real production; the server still enforces `ALLOW_DEV_LOGIN` separately at runtime. |
 
 ### Repo-level GitHub Secrets
 
 Set these under **Settings → Secrets and variables → Actions → Secrets**:
 
-| Secret | Notes |
-| --- | --- |
-| `DATABASE_URL` | `postgres://USER:PASS@elitetc-db.XXX.us-east-1.rds.amazonaws.com:5432/elitetc?sslmode=require` |
-| `OPENAI_API_KEY` | For contract field extraction |
-| `GOOGLE_CLIENT_ID` | Google OAuth client (sign-in) |
-| `GOOGLE_CLIENT_SECRET` | Google OAuth client secret |
-| `SES_FROM_EMAIL` | Verified sender in `us-east-1` (e.g. `no-reply@elitetc.com`) |
+| Secret | Used as | Notes |
+| --- | --- | --- |
+| `DATABASE_URL` | backend runtime env | `postgres://USER:PASS@elitetc-db.XXX.us-east-1.rds.amazonaws.com:5432/elitetc?sslmode=require` |
+| `OPENAI_API_KEY` | backend runtime env | For contract field extraction |
+| `GOOGLE_CLIENT_ID` | **both** backend runtime env (`GOOGLE_CLIENT_ID`, for ID-token verification) **and** frontend build-time arg (`VITE_GOOGLE_CLIENT_ID`, baked into the bundle for Google Identity Services). The workflow reuses the same secret for both — the public client ID value is identical, only the exposure differs. |
+| `GOOGLE_CLIENT_SECRET` | backend runtime env | Google OAuth client secret |
+| `SES_FROM_EMAIL` | backend runtime env | Verified sender in `us-east-1` (e.g. `no-reply@elitetc.com`) |
 
 ## Manual AWS console steps (one-time bootstrap)
 

@@ -16,6 +16,16 @@ COPY package.json package-lock.json* ./
 RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
 
 COPY . .
+
+# Frontend build-time vars. Vite inlines `VITE_*` env vars into the client
+# bundle at build time, so they must be present in this stage (not the
+# runtime stage). Defaults are safe-for-production: empty Google client ID
+# hides the Sign-In button, and dev-login stays off.
+ARG VITE_GOOGLE_CLIENT_ID=""
+ARG VITE_ALLOW_DEV_LOGIN="false"
+ENV VITE_GOOGLE_CLIENT_ID=$VITE_GOOGLE_CLIENT_ID
+ENV VITE_ALLOW_DEV_LOGIN=$VITE_ALLOW_DEV_LOGIN
+
 RUN npm run build
 
 # ---- Stage 2: runtime ----
