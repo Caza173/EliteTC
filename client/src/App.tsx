@@ -1,44 +1,44 @@
-import { useEffect, useState } from "react";
-
-type Diagnostics = {
-  node: string;
-  env: string;
-  hasOpenAI: boolean;
-  hasSes: boolean;
-  region: string;
-  documentsBucket: string;
-};
+import { Route, Switch, useLocation } from "wouter";
+import { useEffect } from "react";
+import Login from "./pages/Login";
+import Verify from "./pages/Verify";
+import Home from "./pages/Home";
+import { useSession } from "./lib/session";
 
 export default function App() {
-  const [diag, setDiag] = useState<Diagnostics | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const session = useSession();
+  const [location, navigate] = useLocation();
 
   useEffect(() => {
-    fetch("/api/diagnostics")
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-      .then(setDiag)
-      .catch((e) => setError(e.message));
-  }, []);
+    if (session.isLoading) return;
+    const isAuthRoute = location === "/login" || location.startsWith("/auth/verify");
+    if (!session.data && !isAuthRoute) navigate("/login");
+    if (session.data && location === "/login") navigate("/");
+  }, [session.isLoading, session.data, location, navigate]);
+
+  if (session.isLoading) {
+    return (
+      <div style={{ fontFamily: "system-ui, sans-serif", padding: 48, color: "#555" }}>
+        Loading...
+      </div>
+    );
+  }
 
   return (
-    <div style={{ fontFamily: "system-ui, sans-serif", maxWidth: 720, margin: "48px auto", padding: 24 }}>
-      <h1 style={{ marginBottom: 4 }}>EliteTC</h1>
-      <p style={{ color: "#555", marginTop: 0 }}>Transaction Coordinator platform</p>
-
-      <section style={{ marginTop: 32 }}>
-        <h2 style={{ fontSize: 18 }}>Service status</h2>
-        {error && <p style={{ color: "crimson" }}>Error loading diagnostics: {error}</p>}
-        {diag && (
-          <ul style={{ lineHeight: 1.8 }}>
-            <li>Node: {diag.node}</li>
-            <li>Env: {diag.env}</li>
-            <li>Region: {diag.region}</li>
-            <li>Documents bucket: {diag.documentsBucket}</li>
-            <li>OpenAI configured: {diag.hasOpenAI ? "yes" : "no"}</li>
-            <li>SES configured: {diag.hasSes ? "yes" : "no"}</li>
-          </ul>
-        )}
-      </section>
-    </div>
+    <Switch>
+      <Route path="/auth/verify" component={Verify} />
+      <Route path="/login" component={Login} />
+      <Route path="/">
+        {session.data ? <Home user={session.data} /> : null}
+      </Route>
+      <Route>
+        <div style={{ fontFamily: "system-ui, sans-serif", padding: 48 }}>
+          <h1>Not found</h1>
+          <p>
+            <a href="/">Home</a>
+          </p>
+        </div>
+      </Route>
+    </Switch>
   );
 }

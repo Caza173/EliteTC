@@ -16,7 +16,8 @@ on EliteGCI** — only the architecture is shared.
   field extraction
 - AWS SES (us-east-1) for transactional email
 - Auth: Google Sign-In (primary), SES magic-link (secondary), dev-login for
-  local development only
+  local development only. Sessions are issued as a `HttpOnly` cookie
+  (`etc_session`); the frontend reads session state via `GET /api/me`.
 
 ## Local development
 
@@ -26,9 +27,15 @@ npm install
 npm run dev
 ```
 
-Visit http://localhost:5000. `/api/diagnostics` reports which integrations
-are wired in (requires an authenticated session — sign in via dev-login,
-Google, or magic-link first).
+Visit http://localhost:5000. The SPA renders `/login` until you sign in.
+`/api/diagnostics` reports which integrations are wired in (requires an
+authenticated session — sign in via dev-login, Google, or magic-link first).
+
+To enable Google Sign-In in the browser, set `VITE_GOOGLE_CLIENT_ID` in
+`.env` (same value as `GOOGLE_CLIENT_ID`) and rebuild. Vite inlines
+`VITE_*` vars at build time, so they are baked into the bundle and must
+be set wherever you run `npm run build` (locally, in CI, or in the Docker
+build stage). To show the dev-login form, set `VITE_ALLOW_DEV_LOGIN=true`.
 
 You can run without S3 / OpenAI / SES credentials — set `SKIP_S3_UPLOAD=true`
 and the relevant keys empty in `.env`, and the app degrades gracefully.
@@ -151,6 +158,15 @@ or via Terraform/CloudFormation if you maintain IaC elsewhere.
 9. **SES verified identity** — verify `no-reply@elitetc.com` (or the
    chosen sender) in `us-east-1`. If you are still in the SES sandbox,
    also verify recipient addresses for testing.
+9a. **Google OAuth client** — in Google Cloud Console, create an OAuth 2.0
+    Client ID of type "Web application". Authorized JavaScript origins:
+    `https://app.elitetc.com` (plus `http://localhost:5000` for local
+    dev). No redirect URI is required — Google Identity Services uses the
+    popup `ux_mode` and posts the ID token back to the page. Store the
+    client ID in both `GOOGLE_CLIENT_ID` (server, for token verification)
+    and `VITE_GOOGLE_CLIENT_ID` (client, baked into the bundle at build
+    time). The client secret is currently unused but is conventional to
+    store as `GOOGLE_CLIENT_SECRET` for forward compatibility.
 10. **Cloudflare DNS** — create an `A`/`ALIAS` record for `app.elitetc.com`
     pointing at the ALB DNS name. **Set proxy status to DNS-only.**
     The Cloudflare proxy broke WebSockets + ALB health checks for
