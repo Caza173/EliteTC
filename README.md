@@ -27,7 +27,8 @@ npm run dev
 ```
 
 Visit http://localhost:5000. `/api/diagnostics` reports which integrations
-are wired in.
+are wired in (requires an authenticated session — sign in via dev-login,
+Google, or magic-link first).
 
 You can run without S3 / OpenAI / SES credentials — set `SKIP_S3_UPLOAD=true`
 and the relevant keys empty in `.env`, and the app degrades gracefully.

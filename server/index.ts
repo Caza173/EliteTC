@@ -13,6 +13,9 @@ process.on("uncaughtException", (err) => {
 });
 
 const app = express();
+// Trust the first proxy hop (ALB) so req.ip / req.protocol reflect the
+// client, and Secure cookies work when ALB terminates TLS.
+app.set("trust proxy", 1);
 const httpServer = createServer(app);
 
 declare module "http" {

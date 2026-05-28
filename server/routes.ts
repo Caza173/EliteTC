@@ -2,6 +2,7 @@ import type { Express, Request, Response } from "express";
 import type { Server } from "node:http";
 import multer from "multer";
 import crypto from "node:crypto";
+import { OAuth2Client } from "google-auth-library";
 import { storage, bootstrap } from "./storage";
 import {
   attachUser,
@@ -16,11 +17,26 @@ import { insertTransactionSchema } from "@shared/schema";
 import { DOCUMENTS_BUCKET, putObject, presignedGetUrl } from "./s3";
 import { ocrFromBytes } from "./ocr";
 import { parseContractText } from "./openai-parse";
+import { sendMagicLinkEmail } from "./email";
 
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 25 * 1024 * 1024 },
 });
+
+const MAGIC_LINK_TTL_MS = 15 * 60 * 1000;
+
+function hashLoginCode(code: string): string {
+  return crypto.createHash("sha256").update(code).digest("hex");
+}
+
+let googleClient: OAuth2Client | null = null;
+function getGoogleClient(): OAuth2Client | null {
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  if (!clientId) return null;
+  if (!googleClient) googleClient = new OAuth2Client(clientId);
+  return googleClient;
+}
 
 export async function registerRoutes(_httpServer: Server, app: Express): Promise<void> {
   await bootstrap();
@@ -52,6 +68,103 @@ export async function registerRoutes(_httpServer: Server, app: Express): Promise
     res.setHeader("Set-Cookie", buildSessionCookie(token, process.env.NODE_ENV === "production"));
     res.json({ user });
   });
+
+  // Google Sign-In: client posts a Google ID token (credential) from
+  // Google Identity Services; we verify it server-side and issue a session.
+  app.post("/api/auth/google", async (req: Request, res: Response) => {
+    const client = getGoogleClient();
+    if (!client) {
+      res.status(503).json({ message: "Google sign-in not configured" });
+      return;
+    }
+    const idToken = String(req.body?.idToken || req.body?.credential || "");
+    if (!idToken) {
+      res.status(400).json({ message: "idToken required" });
+      return;
+    }
+    let payload: { sub: string; email?: string; email_verified?: boolean; name?: string } | undefined;
+    try {
+      const ticket = await client.verifyIdToken({
+        idToken,
+        audience: process.env.GOOGLE_CLIENT_ID,
+      });
+      payload = ticket.getPayload() as typeof payload;
+    } catch (err) {
+      console.warn("[auth/google] verifyIdToken failed:", (err as Error).message);
+      res.status(401).json({ message: "Invalid Google token" });
+      return;
+    }
+    if (!payload || !payload.sub || !payload.email || payload.email_verified === false) {
+      res.status(401).json({ message: "Invalid Google token" });
+      return;
+    }
+    const email = payload.email.toLowerCase();
+    const sub = payload.sub;
+
+    let user = await storage.getUserByGoogleSub(sub);
+    if (!user) {
+      const byEmail = await storage.getUserByEmail(email);
+      if (byEmail) {
+        await storage.setUserGoogleSub(byEmail.id, sub);
+        user = (await storage.getUserById(byEmail.id))!;
+      } else {
+        user = await storage.upsertUser({ email, name: payload.name ?? null, googleSub: sub });
+      }
+    }
+
+    const token = await createSession(user.id);
+    res.setHeader("Set-Cookie", buildSessionCookie(token, process.env.NODE_ENV === "production"));
+    res.json({ user });
+  });
+
+  // Magic-link request: always returns 200 with the same shape regardless of
+  // whether the email is known, to avoid account enumeration.
+  app.post("/api/auth/magic-link/request", async (req: Request, res: Response) => {
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    if (!email || !email.includes("@")) {
+      res.status(400).json({ message: "valid email required" });
+      return;
+    }
+    try {
+      const code = crypto.randomBytes(24).toString("base64url");
+      const codeHash = hashLoginCode(code);
+      const expiresAt = new Date(Date.now() + MAGIC_LINK_TTL_MS);
+      await storage.createLoginCode(email, codeHash, expiresAt);
+      const baseUrl = process.env.APP_BASE_URL || `${req.protocol}://${req.get("host")}`;
+      await sendMagicLinkEmail(email, code, baseUrl);
+    } catch (err) {
+      console.error("[auth/magic-link] request failed:", err);
+    }
+    res.json({ ok: true });
+  });
+
+  // Verify magic link: consumes the code, creates the user if new, issues
+  // a session cookie. Accepts the same payload either via GET (link click)
+  // or POST (form).
+  const verifyHandler = async (req: Request, res: Response) => {
+    const src = req.method === "GET" ? req.query : req.body;
+    const email = String(src?.email || "").trim().toLowerCase();
+    const code = String(src?.code || "");
+    if (!email || !code) {
+      res.status(400).json({ message: "email and code required" });
+      return;
+    }
+    const ok = await storage.consumeLoginCode(email, hashLoginCode(code));
+    if (!ok) {
+      res.status(401).json({ message: "Invalid or expired link" });
+      return;
+    }
+    const user = await storage.upsertUser({ email, name: null });
+    const token = await createSession(user.id);
+    res.setHeader("Set-Cookie", buildSessionCookie(token, process.env.NODE_ENV === "production"));
+    if (req.method === "GET") {
+      res.redirect("/");
+      return;
+    }
+    res.json({ user });
+  };
+  app.get("/api/auth/verify", verifyHandler);
+  app.post("/api/auth/verify", verifyHandler);
 
   app.post("/api/auth/logout", async (req: Request, res: Response) => {
     const cookieHeader = req.headers.cookie ?? "";
@@ -194,12 +307,15 @@ export async function registerRoutes(_httpServer: Server, app: Express): Promise
   );
 
   // ----- diagnostics -----
-  app.get("/api/diagnostics", (_req: Request, res: Response) => {
+  // Auth-gated: leaks integration wiring (env flags, region, bucket) that
+  // shouldn't be public on a production ALB.
+  app.get("/api/diagnostics", requireAuth, (_req: Request, res: Response) => {
     res.json({
       node: process.version,
       env: process.env.NODE_ENV ?? "development",
       hasOpenAI: Boolean(process.env.OPENAI_API_KEY),
       hasSes: Boolean(process.env.SES_FROM_EMAIL),
+      hasGoogle: Boolean(process.env.GOOGLE_CLIENT_ID),
       region: process.env.AWS_REGION ?? "us-east-1",
       documentsBucket: DOCUMENTS_BUCKET,
     });

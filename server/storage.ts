@@ -7,6 +7,7 @@ import {
   tasks,
   deadlines,
   auditLog,
+  loginCodes,
 } from "@shared/schema";
 import type {
   User,
@@ -14,7 +15,7 @@ import type {
   Transaction,
   InsertTransaction,
 } from "@shared/schema";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, isNull, gt } from "drizzle-orm";
 
 // Bootstrap creates the schema if missing. Idempotent — safe to run on every
 // container start. Drizzle migrations are the long-term plan; this gives us
@@ -169,6 +170,36 @@ export const storage = {
     if (existing) return existing;
     const [row] = await db.insert(users).values(u).returning();
     return row;
+  },
+  async getUserByGoogleSub(sub: string): Promise<User | undefined> {
+    const rows = await db.select().from(users).where(eq(users.googleSub, sub)).limit(1);
+    return rows[0];
+  },
+  async setUserGoogleSub(userId: string, sub: string): Promise<void> {
+    await db.update(users).set({ googleSub: sub, updatedAt: new Date() }).where(eq(users.id, userId));
+  },
+
+  // ----- login codes (magic link) -----
+  async createLoginCode(email: string, codeHash: string, expiresAt: Date): Promise<void> {
+    await db.insert(loginCodes).values({ email, codeHash, expiresAt });
+  },
+  async consumeLoginCode(email: string, codeHash: string): Promise<boolean> {
+    const rows = await db
+      .select()
+      .from(loginCodes)
+      .where(
+        and(
+          eq(loginCodes.email, email),
+          eq(loginCodes.codeHash, codeHash),
+          isNull(loginCodes.consumedAt),
+          gt(loginCodes.expiresAt, new Date()),
+        ),
+      )
+      .limit(1);
+    const row = rows[0];
+    if (!row) return false;
+    await db.update(loginCodes).set({ consumedAt: new Date() }).where(eq(loginCodes.id, row.id));
+    return true;
   },
 
   // ----- transactions -----
