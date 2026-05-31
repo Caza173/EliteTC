@@ -1,0 +1,125 @@
+name: Build and deploy to ECS Express Mode
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Required for OIDC federation to AWS
+permissions:
+  id-token: write
+  contents: read
+
+# Only one deploy at a time. Cancel any in-progress deploy when a new commit
+# lands on main so we don't end up with stacked ECS rollouts fighting over
+# the same DB ALTER TABLE locks during bootstrap.
+concurrency:
+  group: deploy-main
+  cancel-in-progress: true
+
+env:
+  AWS_REGION: us-east-1
+  # EliteTC AWS account ID. Set as a repo variable so the workflow file
+  # doesn't pin a value at rest. Use the SAME account as EliteGCI (the goal
+  # is one console, separate resources) — only the resource names differ.
+  AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+  ECR_REPOSITORY: elitetc
+  ECS_CLUSTER: elitetc
+  ECS_SERVICE: elitetc
+  CONTAINER_PORT: "8080"
+  # Security group used by both the ECS task and RDS so tasks can reach
+  # RDS:5432. After first deploy, add a self-reference inbound rule on 5432.
+  # MUST be different from EliteGCI's SG to keep network isolation per app.
+  TASK_SECURITY_GROUP: ${{ vars.TASK_SECURITY_GROUP }}
+
+jobs:
+  deploy:
+    name: Build, push to ECR, deploy to ECS Express Mode
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/elitetc-github-actions-deploy
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push image
+        id: build
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+          # Frontend build-time vars. `VITE_*` values are inlined into the
+          # client JS bundle at build time, so they MUST be passed to
+          # `docker build` as build args (not ECS task env vars). The
+          # GOOGLE_CLIENT_ID secret is reused here — the public client ID
+          # is the same value, just exposed to the browser.
+          VITE_GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          # Defaults to "false" (production-safe) when the repo variable
+          # is unset, so the dev-login form is hidden in the bundle.
+          VITE_ALLOW_DEV_LOGIN: ${{ vars.VITE_ALLOW_DEV_LOGIN || 'false' }}
+        run: |
+          IMAGE_URI=$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker buildx build \
+            --platform linux/amd64 \
+            --build-arg VITE_GOOGLE_CLIENT_ID="$VITE_GOOGLE_CLIENT_ID" \
+            --build-arg VITE_ALLOW_DEV_LOGIN="$VITE_ALLOW_DEV_LOGIN" \
+            --tag $IMAGE_URI \
+            --tag $REGISTRY/$ECR_REPOSITORY:latest \
+            --push \
+            .
+          echo "image_uri=$IMAGE_URI" >> $GITHUB_OUTPUT
+
+      # Use ECS Express Mode (same as EliteGCI). Express Mode manages a single
+      # stable service + target group, which avoids the blue/green flap where
+      # the ALB listener pointed at an empty target group between deployments.
+      # Health check is /healthz (returns 200 immediately) so the task is
+      # marked healthy while bootstrap+migrations run; /ready is the strict
+      # gate for app-level readiness checks.
+      - name: Deploy to ECS Express Mode
+        id: deploy
+        uses: aws-actions/amazon-ecs-deploy-express-service@v1
+        with:
+          service-name: ${{ env.ECS_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          image: ${{ steps.build.outputs.image_uri }}
+          container-port: ${{ env.CONTAINER_PORT }}
+          execution-role-arn: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/ecsTaskExecutionRole
+          infrastructure-role-arn: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/ecsInfrastructureRoleForExpressServices
+          task-role-arn: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/elitetc-ecs-task-role
+          health-check-path: /healthz
+          security-groups: ${{ env.TASK_SECURITY_GROUP }}
+          cpu: "256"
+          memory: "512"
+          min-task-count: "1"
+          max-task-count: "2"
+          environment-variables: |
+            [
+              {"name":"NODE_ENV","value":"production"},
+              {"name":"PORT","value":"8080"},
+              {"name":"DATABASE_URL","value":"${{ secrets.DATABASE_URL }}"},
+              {"name":"AWS_REGION","value":"us-east-1"},
+              {"name":"S3_DOCUMENTS_BUCKET","value":"${{ vars.S3_DOCUMENTS_BUCKET }}"},
+              {"name":"SES_REGION","value":"us-east-1"},
+              {"name":"SES_FROM_EMAIL","value":"${{ secrets.SES_FROM_EMAIL }}"},
+              {"name":"OPENAI_API_KEY","value":"${{ secrets.OPENAI_API_KEY }}"},
+              {"name":"OPENAI_PARSE_MODEL","value":"gpt-4o-mini"},
+              {"name":"GOOGLE_CLIENT_ID","value":"${{ secrets.GOOGLE_CLIENT_ID }}"},
+              {"name":"GOOGLE_CLIENT_SECRET","value":"${{ secrets.GOOGLE_CLIENT_SECRET }}"},
+              {"name":"APP_BASE_URL","value":"${{ vars.APP_BASE_URL }}"}
+            ]
+
+      - name: Print endpoint
+        run: |
+          echo "Service ARN: ${{ steps.deploy.outputs.service-arn }}"
+          echo "Endpoint:    ${{ steps.deploy.outputs.endpoint }}"
