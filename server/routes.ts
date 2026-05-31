@@ -13,7 +13,8 @@ import {
   buildClearSessionCookie,
   SESSION_COOKIE,
 } from "./auth";
-import { insertTransactionSchema } from "@shared/schema";
+import { insertTransactionSchema, dealStages } from "@shared/schema";
+import { z } from "zod";
 import { DOCUMENTS_BUCKET, putObject, presignedGetUrl } from "./s3";
 import { ocrFromBytes } from "./ocr";
 import { parseContractText } from "./openai-parse";
@@ -212,6 +213,32 @@ export async function registerRoutes(_httpServer: Server, app: Express): Promise
       storage.listDeadlines(tx.id),
     ]);
     res.json({ transaction: tx, contacts, documents, tasks, deadlines });
+  });
+
+  const patchTransactionSchema = z.object({
+    dealStage: z.enum(dealStages),
+  });
+
+  app.patch("/api/transactions/:id", requireAuth, async (req: Request, res: Response) => {
+    const parse = patchTransactionSchema.safeParse(req.body);
+    if (!parse.success) {
+      res.status(400).json({ message: "invalid update", errors: parse.error.flatten() });
+      return;
+    }
+    const tx = await storage.updateTransaction(String(req.params.id), req.user!.id, parse.data);
+    if (!tx) {
+      res.status(404).json({ message: "not found" });
+      return;
+    }
+    await storage.writeAudit({
+      actorId: req.user!.id,
+      transactionId: tx.id,
+      action: "update",
+      entity: "transaction",
+      entityId: tx.id,
+      payload: parse.data,
+    });
+    res.json({ transaction: tx });
   });
 
   // ----- documents: upload + OCR + OpenAI parse pipeline -----

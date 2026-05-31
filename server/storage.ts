@@ -71,6 +71,7 @@ export async function bootstrap(): Promise<void> {
       mls_number text,
       side text NOT NULL DEFAULT 'buy',
       status text NOT NULL DEFAULT 'intake',
+      deal_stage text NOT NULL DEFAULT 'under_contract',
       contract_date timestamptz,
       closing_date timestamptz,
       sale_price_cents integer,
@@ -81,6 +82,8 @@ export async function bootstrap(): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS transactions_owner_idx ON transactions(owner_id);
     CREATE INDEX IF NOT EXISTS transactions_status_idx ON transactions(status);
+    -- Backfill for tables created before deal_stage existed.
+    ALTER TABLE transactions ADD COLUMN IF NOT EXISTS deal_stage text NOT NULL DEFAULT 'under_contract';
 
     CREATE TABLE IF NOT EXISTS contacts (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -220,6 +223,18 @@ export const storage = {
   },
   async createTransaction(t: InsertTransaction): Promise<Transaction> {
     const [row] = await db.insert(transactions).values(t).returning();
+    return row;
+  },
+  async updateTransaction(
+    id: string,
+    ownerId: string,
+    patch: Partial<Pick<Transaction, "dealStage">>,
+  ): Promise<Transaction | undefined> {
+    const [row] = await db
+      .update(transactions)
+      .set({ ...patch, updatedAt: new Date() })
+      .where(and(eq(transactions.id, id), eq(transactions.ownerId, ownerId)))
+      .returning();
     return row;
   },
 

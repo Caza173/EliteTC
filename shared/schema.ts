@@ -59,6 +59,12 @@ export const transactionStatuses = [
   "cancelled",
 ] as const;
 
+// User-selectable deal stage shown on the transaction. Distinct from the
+// internal lifecycle `status` above: this reflects the listing/contract state
+// a coordinator manages by hand. Constants live in ./deal-stage so the client
+// can import them without pulling in drizzle.
+export { dealStages, dealStageLabels, type DealStage } from "./deal-stage";
+
 export const transactions = pgTable(
   "transactions",
   {
@@ -72,6 +78,7 @@ export const transactions = pgTable(
     mlsNumber: text("mls_number"),
     side: text("side").notNull().default("buy"),
     status: text("status").notNull().default("intake"),
+    dealStage: text("deal_stage").notNull().default("under_contract"),
     contractDate: timestamp("contract_date", { withTimezone: true }),
     closingDate: timestamp("closing_date", { withTimezone: true }),
     salePriceCents: integer("sale_price_cents"),
