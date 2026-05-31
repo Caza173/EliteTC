@@ -3,7 +3,11 @@ import { useEffect } from "react";
 import Login from "./pages/Login";
 import Verify from "./pages/Verify";
 import Home from "./pages/Home";
-import { useSession } from "./lib/session";
+import Settings from "./pages/Settings";
+import Transactions from "./pages/Transactions";
+import TransactionDetail from "./pages/TransactionDetail";
+import AppLayout from "./components/AppLayout";
+import { useSession, type SessionUser } from "./lib/session";
 
 export default function App() {
   const session = useSession();
@@ -28,8 +32,17 @@ export default function App() {
     <Switch>
       <Route path="/auth/verify" component={Verify} />
       <Route path="/login" component={Login} />
-      <Route path="/">
-        {session.data ? <Home user={session.data} /> : null}
+      <Route path="/">{session.data ? <Authed user={session.data} page="home" /> : null}</Route>
+      <Route path="/transactions/:id">
+        {(params) =>
+          session.data ? <Authed user={session.data} page="detail" id={params.id} /> : null
+        }
+      </Route>
+      <Route path="/transactions">
+        {session.data ? <Authed user={session.data} page="transactions" /> : null}
+      </Route>
+      <Route path="/settings">
+        {session.data ? <Authed user={session.data} page="settings" /> : null}
       </Route>
       <Route>
         <div style={{ fontFamily: "system-ui, sans-serif", padding: 48 }}>
@@ -40,5 +53,24 @@ export default function App() {
         </div>
       </Route>
     </Switch>
+  );
+}
+
+function Authed({
+  user,
+  page,
+  id,
+}: {
+  user: SessionUser;
+  page: "home" | "transactions" | "detail" | "settings";
+  id?: string;
+}) {
+  return (
+    <AppLayout user={user}>
+      {page === "home" && <Home user={user} />}
+      {page === "transactions" && <Transactions />}
+      {page === "detail" && id && <TransactionDetail id={id} />}
+      {page === "settings" && <Settings user={user} />}
+    </AppLayout>
   );
 }
