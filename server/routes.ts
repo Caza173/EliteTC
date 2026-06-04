@@ -306,6 +306,29 @@ export async function registerRoutes(_httpServer: Server, app: Express): Promise
     },
   );
 
+  // ----- settings: demo data -----
+  // Reports how much seeded/demo/sample data the current user has. The
+  // Settings UI uses this to enable/disable the "Delete demo data" action.
+  app.get("/api/settings/demo-data", requireAuth, async (req: Request, res: Response) => {
+    const counts = await storage.countDemoData(req.user!.id);
+    res.json({ counts });
+  });
+
+  // Deletes ONLY records explicitly marked as demo/seed/sample and owned by
+  // the current user. Real user-created records are never touched.
+  app.post("/api/settings/demo-data/delete", requireAuth, async (req: Request, res: Response) => {
+    const deleted = await storage.deleteDemoData(req.user!.id);
+    if (deleted.total > 0) {
+      await storage.writeAudit({
+        actorId: req.user!.id,
+        action: "delete",
+        entity: "demo_data",
+        payload: deleted,
+      });
+    }
+    res.json({ deleted });
+  });
+
   // ----- diagnostics -----
   // Auth-gated: leaks integration wiring (env flags, region, bucket) that
   // shouldn't be public on a production ALB.

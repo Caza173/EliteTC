@@ -15,7 +15,8 @@ import type {
   Transaction,
   InsertTransaction,
 } from "@shared/schema";
-import { eq, and, desc, isNull, gt } from "drizzle-orm";
+import { eq, and, desc, isNull, gt, inArray } from "drizzle-orm";
+import { summarizeDemoCounts, type DemoDataCounts } from "./demo-data";
 
 // Bootstrap creates the schema if missing. Idempotent — safe to run on every
 // container start. Drizzle migrations are the long-term plan; this gives us
@@ -151,6 +152,14 @@ export async function bootstrap(): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS audit_log_tx_idx ON audit_log(transaction_id);
     CREATE INDEX IF NOT EXISTS audit_log_created_idx ON audit_log(created_at);
+
+    -- Demo/seed markers. Idempotent so existing deployments pick them up on
+    -- the next container start. Real user-created rows always default to false.
+    ALTER TABLE transactions ADD COLUMN IF NOT EXISTS is_demo boolean NOT NULL DEFAULT false;
+    ALTER TABLE contacts ADD COLUMN IF NOT EXISTS is_demo boolean NOT NULL DEFAULT false;
+    ALTER TABLE documents ADD COLUMN IF NOT EXISTS is_demo boolean NOT NULL DEFAULT false;
+    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS is_demo boolean NOT NULL DEFAULT false;
+    CREATE INDEX IF NOT EXISTS transactions_demo_idx ON transactions(owner_id, is_demo);
   `;
   await pool.query(ddl);
 }
@@ -221,6 +230,55 @@ export const storage = {
   async createTransaction(t: InsertTransaction): Promise<Transaction> {
     const [row] = await db.insert(transactions).values(t).returning();
     return row;
+  },
+
+  // ----- demo data -----
+  // Counts of demo/seed/sample rows owned by this user. Drives the Settings
+  // "Delete demo data" action: the button is disabled when total is 0.
+  async countDemoData(ownerId: string): Promise<DemoDataCounts> {
+    const demoTx = await db
+      .select({ id: transactions.id })
+      .from(transactions)
+      .where(and(eq(transactions.ownerId, ownerId), eq(transactions.isDemo, true)));
+    const txIds = demoTx.map((r) => r.id);
+
+    const [demoContacts, demoDocs, demoTasks] = await Promise.all([
+      db.select({ id: contacts.id }).from(contacts).where(and(eq(contacts.ownerId, ownerId), eq(contacts.isDemo, true))),
+      db.select({ id: documents.id }).from(documents).where(and(eq(documents.ownerId, ownerId), eq(documents.isDemo, true))),
+      db.select({ id: tasks.id }).from(tasks).where(and(eq(tasks.ownerId, ownerId), eq(tasks.isDemo, true))),
+    ]);
+
+    const deadlineRows = txIds.length
+      ? await db.select({ id: deadlines.id }).from(deadlines).where(inArray(deadlines.transactionId, txIds))
+      : [];
+
+    const counts = {
+      transactions: txIds.length,
+      contacts: demoContacts.length,
+      documents: demoDocs.length,
+      tasks: demoTasks.length,
+      deadlines: deadlineRows.length,
+    };
+    return { ...counts, total: summarizeDemoCounts(counts) };
+  },
+
+  // Deletes ONLY rows explicitly marked is_demo = true and owned by this user.
+  // Real user-created records (is_demo = false) and other users' rows are never
+  // touched. Deadlines are removed via the ON DELETE CASCADE from their parent
+  // demo transaction; demo child rows not attached to a demo transaction are
+  // deleted directly by their own is_demo flag.
+  async deleteDemoData(ownerId: string): Promise<DemoDataCounts> {
+    const before = await this.countDemoData(ownerId);
+    if (before.total === 0) return before;
+
+    await db.transaction(async (tx) => {
+      await tx.delete(documents).where(and(eq(documents.ownerId, ownerId), eq(documents.isDemo, true)));
+      await tx.delete(contacts).where(and(eq(contacts.ownerId, ownerId), eq(contacts.isDemo, true)));
+      await tx.delete(tasks).where(and(eq(tasks.ownerId, ownerId), eq(tasks.isDemo, true)));
+      // Deleting demo transactions cascades to their deadlines/contacts/etc.
+      await tx.delete(transactions).where(and(eq(transactions.ownerId, ownerId), eq(transactions.isDemo, true)));
+    });
+    return before;
   },
 
   // ----- contacts / documents / tasks / deadlines -----

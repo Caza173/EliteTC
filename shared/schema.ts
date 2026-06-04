@@ -77,6 +77,10 @@ export const transactions = pgTable(
     salePriceCents: integer("sale_price_cents"),
     commissionBps: integer("commission_bps"),
     metadata: jsonb("metadata").notNull().default({}),
+    // Marks seeded/demo/sample records. Real user-created records are always
+    // false. The Settings "Delete demo data" action only ever targets rows
+    // where this is true, scoped to the owning user.
+    isDemo: boolean("is_demo").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -98,6 +102,7 @@ export const contacts = pgTable(
     phone: text("phone"),
     company: text("company"),
     metadata: jsonb("metadata").notNull().default({}),
+    isDemo: boolean("is_demo").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
@@ -122,6 +127,7 @@ export const documents = pgTable(
     ocrText: text("ocr_text"),
     parseStatus: text("parse_status").notNull().default("pending"),
     parsed: jsonb("parsed"),
+    isDemo: boolean("is_demo").notNull().default(false),
     uploadedAt: timestamp("uploaded_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
@@ -140,6 +146,7 @@ export const tasks = pgTable(
     dueDate: timestamp("due_date", { withTimezone: true }),
     completedAt: timestamp("completed_at", { withTimezone: true }),
     priority: text("priority").notNull().default("normal"),
+    isDemo: boolean("is_demo").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
