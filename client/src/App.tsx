@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import Login from "./pages/Login";
 import Verify from "./pages/Verify";
 import Home from "./pages/Home";
+import Settings from "./pages/Settings";
 import { useSession } from "./lib/session";
 
 export default function App() {
@@ -28,6 +29,9 @@ export default function App() {
     <Switch>
       <Route path="/auth/verify" component={Verify} />
       <Route path="/login" component={Login} />
+      <Route path="/settings">
+        {session.data ? <Settings user={session.data} /> : null}
+      </Route>
       <Route path="/">
         {session.data ? <Home user={session.data} /> : null}
       </Route>

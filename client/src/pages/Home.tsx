@@ -47,21 +47,35 @@ export default function Home({ user }: { user: SessionUser }) {
         </div>
         <div style={{ textAlign: "right", fontSize: 13, color: "#555" }}>
           <div>{user.name || user.email}</div>
-          <button
-            type="button"
-            onClick={() => logout.mutate()}
-            disabled={logout.isPending}
-            style={{
-              marginTop: 6,
-              background: "none",
-              border: "1px solid #ccc",
-              borderRadius: 6,
-              padding: "4px 10px",
-              cursor: "pointer",
-            }}
-          >
-            {logout.isPending ? "Signing out..." : "Sign out"}
-          </button>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 6 }}>
+            <button
+              type="button"
+              onClick={() => navigate("/settings")}
+              style={{
+                background: "none",
+                border: "1px solid #ccc",
+                borderRadius: 6,
+                padding: "4px 10px",
+                cursor: "pointer",
+              }}
+            >
+              Settings
+            </button>
+            <button
+              type="button"
+              onClick={() => logout.mutate()}
+              disabled={logout.isPending}
+              style={{
+                background: "none",
+                border: "1px solid #ccc",
+                borderRadius: 6,
+                padding: "4px 10px",
+                cursor: "pointer",
+              }}
+            >
+              {logout.isPending ? "Signing out..." : "Sign out"}
+            </button>
+          </div>
         </div>
       </div>
 
